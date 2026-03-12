@@ -90,6 +90,26 @@
         </div>
     </section>
 
+    {{-- Processing status summary --}}
+    <section class="grid gap-4 md:gap-5 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 mb-6">
+        <div class="rounded-2xl bg-slate-900/60 border border-slate-700/80 p-4">
+            <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">Pending</div>
+            <div class="mt-2 text-2xl font-semibold text-slate-100">{{ number_format($processingCounts['pending'] ?? 0) }}</div>
+        </div>
+        <div class="rounded-2xl bg-slate-900/60 border border-slate-700/80 p-4">
+            <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">Processing</div>
+            <div class="mt-2 text-2xl font-semibold text-blue-200">{{ number_format($processingCounts['processing'] ?? 0) }}</div>
+        </div>
+        <div class="rounded-2xl bg-slate-900/60 border border-slate-700/80 p-4">
+            <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">Completed</div>
+            <div class="mt-2 text-2xl font-semibold text-emerald-200">{{ number_format($processingCounts['completed'] ?? 0) }}</div>
+        </div>
+        <div class="rounded-2xl bg-slate-900/60 border border-slate-700/80 p-4">
+            <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">Failed</div>
+            <div class="mt-2 text-2xl font-semibold text-rose-200">{{ number_format($processingCounts['failed'] ?? 0) }}</div>
+        </div>
+    </section>
+
     {{-- Recent files & activity --}}
     <section class="grid grid-cols-1 lg:grid-cols-3 gap-5">
         <div class="lg:col-span-2 rounded-2xl bg-slate-900/70 border border-slate-700/80 p-4 md:p-5">

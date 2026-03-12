@@ -5,7 +5,9 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\FileDetailResource;
 use App\Http\Resources\FilesResource;
+use App\Jobs\ProcessUploadedFileJob;
 use App\Models\UploadedFile;
+use App\Services\DatasetVersionService;
 use App\Services\PythonProcessingService;
 use Illuminate\Http\Request;
 use App\Services\UploadedFileService;
@@ -13,16 +15,23 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Log;
 
 class UploadedFileController extends Controller
 {
     protected UploadedFileService $fileService;
     protected PythonProcessingService $pythonService;
+    protected DatasetVersionService $versionService;
 
-    public function __construct(UploadedFileService $fileService, PythonProcessingService $pythonService)
+    public function __construct(
+        UploadedFileService $fileService,
+        PythonProcessingService $pythonService,
+        DatasetVersionService $versionService
+    )
     {
         $this->fileService   = $fileService;
         $this->pythonService = $pythonService;
+        $this->versionService = $versionService;
     }
 
 
@@ -33,16 +42,22 @@ class UploadedFileController extends Controller
     }
 
     public function upload(Request $request): JsonResponse
-    {        // Validate request
+    {
+        Log::info('API file upload start');
+
+        // Validate request
         $validator = Validator::make($request->all(), [
             'file_type' => 'required|string|in:txt,csv,xml,xlsx',
-            'file' => 'required|file|max:10240',
+            'file' => 'required|file|mimes:csv,txt,xml,xlsx|max:10240',
         ]);
 
         if ($validator->fails()) {
             return response()->json([
-                'success' => false,
-                'errors' => $validator->errors(),
+                'status' => 'error',
+                'message' => 'Validation failed',
+                'data' => [
+                    'errors' => $validator->errors(),
+                ],
             ], 422);
         }
 
@@ -51,19 +66,23 @@ class UploadedFileController extends Controller
             $request->file('file')
         );
 
-        // Auto-check quality after upload
-        $qualityResult = null;
-        try {
-            $qualityResult = $this->pythonService->process('quality_check.py', [
-                'file_type' => $uploadedFile->file_type,
-                'file_path' => storage_path("app/public/{$uploadedFile->file_path}")
-            ]);
-        } catch (\Exception $e) {
-            // Quality check failed, but upload succeeded
-        }
+        Log::info('API file upload success', [
+            'file_id' => $uploadedFile->id,
+            'file_slug' => $uploadedFile->slug,
+        ]);
+
+        // Phase 2: queue processing instead of blocking API call
+        $uploadedFile->update([
+            'processing_status' => 'pending',
+        ]);
+
+        // Ensure initial version exists
+        $this->versionService->createInitialVersion($uploadedFile);
+        ProcessUploadedFileJob::dispatch($uploadedFile->id);
 
         return response()->json([
-            'success' => true,
+            'status' => 'success',
+            'message' => 'File uploaded successfully. Dataset is currently being analyzed...',
             'data' => [
                 'id' => $uploadedFile->id,
                 'original_name' => $uploadedFile->original_name,
@@ -71,9 +90,13 @@ class UploadedFileController extends Controller
                 'file_path' => $uploadedFile->file_path,
                 'mime_type' => $uploadedFile->mime_type,
                 'file_size' => $uploadedFile->file_size,
+                'rows_count' => $uploadedFile->rows_count,
+                'columns_count' => $uploadedFile->columns_count,
+                'dataset_size' => $uploadedFile->dataset_size,
+                'quality_score' => $uploadedFile->quality_score,
+                'processing_status' => $uploadedFile->processing_status,
+                'quality_check' => null,
             ],
-            'quality_check' => $qualityResult,
-            'message' => 'File uploaded successfully',
         ]);
     }
 
@@ -86,25 +109,32 @@ class UploadedFileController extends Controller
             if (!$file) {
                 return response()->json([
                     'status'  => 'error',
-                    'message' => 'File not found'
+                    'message' => 'File not found',
+                    'data' => null,
                 ], 404);
             }
 
             $result = $this->pythonService->process('process_file.py', [
                 'file_type' => $file->file_type,
-                'file_path' => storage_path("app/public/{$file->file_path}")
+                'file_path' => $this->versionService->latestAbsolutePath($file),
             ]);
 
-            return (new FileDetailResource([
+            $resource = new FileDetailResource([
                 'file'   => $file,
                 'result' => $result
-            ]))->additional([
-                'status' => 'success'
+            ]);
+
+            return $resource->additional([
+                'status' => 'success',
+                'message' => 'File processed successfully',
             ]);
         } catch (\Exception $e) {
             return response()->json([
                 'status' => 'error',
-                'message' => 'Failed to process file: ' . $e->getMessage()
+                'message' => 'Failed to process file',
+                'data' => [
+                    'error' => $e->getMessage(),
+                ],
             ], 500);
         }
     }
@@ -116,8 +146,9 @@ class UploadedFileController extends Controller
 
             if (!$file) {
                 return response()->json([
-                    'success' => false,
-                    'message' => 'File not found'
+                    'status' => 'error',
+                    'message' => 'File not found',
+                    'data' => null,
                 ], 404);
             }
 
@@ -131,13 +162,17 @@ class UploadedFileController extends Controller
             $file->delete();
 
             return response()->json([
-                'success' => true,
-                'message' => 'File deleted successfully'
+                'status' => 'success',
+                'message' => 'File deleted successfully',
+                'data' => null,
             ]);
         } catch (\Exception $e) {
             return response()->json([
-                'success' => false,
-                'message' => 'Failed to delete file: ' . $e->getMessage()
+                'status' => 'error',
+                'message' => 'Failed to delete file',
+                'data' => [
+                    'error' => $e->getMessage(),
+                ],
             ], 500);
         }
     }
@@ -149,33 +184,40 @@ class UploadedFileController extends Controller
 
             if (!$file) {
                 return response()->json([
-                    'success' => false,
-                    'message' => 'File not found'
+                    'status' => 'error',
+                    'message' => 'File not found',
+                    'data' => null,
                 ], 404);
             }
 
             $result = $this->pythonService->process('quality_check.py', [
                 'file_type' => $file->file_type,
-                'file_path' => storage_path("app/public/{$file->file_path}")
+                'file_path' => $this->versionService->latestAbsolutePath($file),
             ]);
 
             return response()->json([
-                'success' => true,
-                'quality_score' => $result['quality_score'],
-                'is_clean' => $result['is_clean'],
-                'total_rows' => $result['total_rows'],
-                'total_columns' => $result['total_columns'],
-                'total_missing' => $result['total_missing'],
-                'total_duplicate_rows' => $result['total_duplicate_rows'],
-                'total_outliers' => $result['total_outliers'],
-                'issues' => $result['issues'],
-                'issues_by_type' => $result['issues_by_type'],
-                'column_quality' => $result['column_quality']
+                'status' => 'success',
+                'message' => 'Quality check completed',
+                'data' => [
+                    'quality_score' => $result['quality_score'],
+                    'is_clean' => $result['is_clean'],
+                    'total_rows' => $result['total_rows'],
+                    'total_columns' => $result['total_columns'],
+                    'total_missing' => $result['total_missing'],
+                    'total_duplicate_rows' => $result['total_duplicate_rows'],
+                    'total_outliers' => $result['total_outliers'],
+                    'issues' => $result['issues'],
+                    'issues_by_type' => $result['issues_by_type'],
+                    'column_quality' => $result['column_quality'],
+                ],
             ]);
         } catch (\Exception $e) {
             return response()->json([
-                'success' => false,
-                'message' => 'Failed to check file quality: ' . $e->getMessage()
+                'status' => 'error',
+                'message' => 'Failed to check file quality',
+                'data' => [
+                    'error' => $e->getMessage(),
+                ],
             ], 500);
         }
     }
@@ -195,8 +237,11 @@ class UploadedFileController extends Controller
 
         if ($validator->fails()) {
             return response()->json([
-                'success' => false,
-                'errors' => $validator->errors(),
+                'status' => 'error',
+                'message' => 'Validation failed',
+                'data' => [
+                    'errors' => $validator->errors(),
+                ],
             ], 422);
         }
 
@@ -205,29 +250,50 @@ class UploadedFileController extends Controller
 
             if (!$file) {
                 return response()->json([
-                    'success' => false,
-                    'message' => 'File not found'
+                    'status' => 'error',
+                    'message' => 'File not found',
+                    'data' => null,
                 ], 404);
             }
 
+            $operations = $request->input('operations');
+
+            $operationsSummary = [
+                'operations' => array_map(
+                    fn (array $op) => $op['type'] . (isset($op['column']) ? ' (' . $op['column'] . ')' : ''),
+                    $operations
+                ),
+            ];
+
+            $newVersion = $this->versionService->createVersionFromExisting($file, $operationsSummary);
+
             $result = $this->pythonService->process('clean_data.py', [
                 'file_type' => $file->file_type,
-                'file_path' => storage_path("app/public/{$file->file_path}"),
-                'operations' => $request->input('operations')
+                'file_path' => storage_path('app/public/' . $newVersion->file_path),
+                'operations' => $operations,
+            ]);
+
+            $newVersion->update([
+                'rows_count' => $result['cleaned_rows'] ?? $newVersion->rows_count,
             ]);
 
             return response()->json([
-                'success' => true,
+                'status' => 'success',
                 'message' => $result['message'] ?? 'Data cleaned successfully',
-                'original_rows' => $result['original_rows'],
-                'cleaned_rows' => $result['cleaned_rows'],
-                'rows_removed' => $result['rows_removed'],
-                'applied_operations' => $result['applied_operations']
+                'data' => [
+                    'original_rows' => $result['original_rows'],
+                    'cleaned_rows' => $result['cleaned_rows'],
+                    'rows_removed' => $result['rows_removed'],
+                    'applied_operations' => $result['applied_operations'],
+                ],
             ]);
         } catch (\Exception $e) {
             return response()->json([
-                'success' => false,
-                'message' => $e->getMessage()
+                'status' => 'error',
+                'message' => 'Failed to clean data',
+                'data' => [
+                    'error' => $e->getMessage(),
+                ],
             ], 500);
         }
     }

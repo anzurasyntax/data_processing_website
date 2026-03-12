@@ -31,6 +31,7 @@ Route::middleware('auth')->group(function () {
     Route::post('/files', [UploadedFileController::class, 'store'])->name('files.store');
     Route::delete('/files/{slug}', [UploadedFileController::class, 'destroy'])->name('files.delete');
     Route::get('/files/{slug}/quality', [UploadedFileController::class, 'quality'])->name('files.quality');
+    Route::get('/files/{slug}/status', [UploadedFileController::class, 'status'])->name('files.status');
 
     // Listing + preview/processing
     Route::get('/my-files', [FileProcessingController::class, 'index'])->name('files.list');
@@ -46,4 +47,7 @@ Route::middleware('auth')->group(function () {
     Route::post('/files/{slug}/visualize-build', [FileProcessingController::class, 'visualizeBuild'])->name('files.visualize-build');
     Route::get('/files/{slug}/insight-strategy', [FileProcessingController::class, 'insightStrategy'])->name('files.insight-strategy');
     Route::get('/files/{slug}/insight-strategy-data', [FileProcessingController::class, 'insightStrategyData'])->name('files.insight-strategy-data');
+    Route::get('/files/{slug}/versions', [FileProcessingController::class, 'versions'])->name('files.versions');
+    Route::post('/files/{slug}/revert/{version}', [FileProcessingController::class, 'revert'])->name('files.revert');
+    Route::get('/files/{slug}/export/{version}/{format}', [FileProcessingController::class, 'export'])->name('files.export');
 });

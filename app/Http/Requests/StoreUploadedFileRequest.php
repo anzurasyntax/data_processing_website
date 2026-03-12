@@ -15,7 +15,8 @@ class StoreUploadedFileRequest extends FormRequest
     {
         return [
             'file_type' => 'required|string|in:txt,csv,xml,xlsx',
-            'file'      => 'required|file',
+            // Max 10MB, restrict to known tabular types, and require a real file
+            'file'      => 'required|file|mimes:csv,txt,xml,xlsx|max:10240',
         ];
     }
 

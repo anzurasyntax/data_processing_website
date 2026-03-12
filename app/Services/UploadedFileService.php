@@ -11,6 +11,8 @@ class UploadedFileService
     public function store($fileType, $file, ?int $userId = null): UploadedFile
     {
         $originalName = (string) $file->getClientOriginalName();
+
+        // Sanitize original filename to avoid problematic characters
         $base = pathinfo($originalName, PATHINFO_FILENAME);
         $ext = strtolower((string) pathinfo($originalName, PATHINFO_EXTENSION));
         $baseSlug = Str::slug($base) ?: 'file';
@@ -28,19 +30,23 @@ class UploadedFileService
             $slug = $baseSlug . '-' . Str::lower(Str::random(6));
         }
 
+        // Prefer the validated extension; fall back to provided file type
         $safeExt = $ext ?: $fileType;
         $fileName = $slug . '.' . $safeExt;
         $dir = $userId ? "uploads/user-{$userId}" : 'uploads/public';
         $path = Storage::disk('public')->putFileAs($dir, $file, $fileName);
 
         return UploadedFile::create(array_filter([
-            'user_id'       => $userId,
-            'slug'          => $slug,
-            'original_name' => $originalName,
-            'file_type'     => $fileType,
-            'file_path'     => $path,
-            'mime_type'     => $file->getClientMimeType(),
-            'file_size'     => $file->getSize(),
+            'user_id'          => $userId,
+            'slug'             => $slug,
+            'original_name'    => $originalName,
+            'file_type'        => $fileType,
+            'file_path'        => $path,
+            'mime_type'        => $file->getClientMimeType(),
+            'file_size'        => $file->getSize(),
+            // Phase 1 metadata defaults
+            'dataset_size'     => $file->getSize(),
+            'processing_status'=> 'pending',
         ], fn ($v) => $v !== null));
     }
 

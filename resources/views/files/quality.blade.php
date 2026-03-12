@@ -44,12 +44,56 @@
     @if(!isset($qualityResult) || $qualityResult === null)
     <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
         <div class="text-center py-8">
-            <p class="text-gray-600 mb-4">Unable to load quality report. Please try again.</p>
-            <a href="{{ route('files.quality', $file->slug) }}" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition">
-                Retry Quality Check
-            </a>
+            @if(in_array($file->processing_status, ['pending', 'processing']))
+                <p class="text-gray-600 mb-2 font-medium">Dataset is currently being analyzed...</p>
+                <p class="text-gray-500 text-sm mb-4">This page will refresh automatically when processing completes.</p>
+                <div class="text-xs text-gray-400" id="processing-status-label">
+                    Status: {{ $file->processing_status }}
+                </div>
+            @elseif($file->processing_status === 'failed')
+                <p class="text-gray-600 mb-4">Processing failed. Please try again.</p>
+                <a href="{{ route('files.quality', $file->slug) }}" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition">
+                    Retry Quality Check
+                </a>
+            @else
+                <p class="text-gray-600 mb-4">Unable to load quality report. Please try again.</p>
+                <a href="{{ route('files.quality', $file->slug) }}" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition">
+                    Retry Quality Check
+                </a>
+            @endif
         </div>
     </div>
+
+    @if(in_array($file->processing_status, ['pending', 'processing']))
+    <script>
+      (function () {
+        const statusUrl = @json(route('files.status', $file->slug));
+        const label = document.getElementById('processing-status-label');
+
+        async function poll() {
+          try {
+            const res = await fetch(statusUrl, { headers: { 'Accept': 'application/json' } });
+            const json = await res.json();
+            const status = json?.data?.processing_status;
+            if (label && status) label.textContent = 'Status: ' + status;
+            if (status === 'completed') {
+              window.location.reload();
+              return;
+            }
+            if (status === 'failed') {
+              window.location.reload();
+              return;
+            }
+          } catch (e) {
+            // Ignore transient polling failures
+          }
+          setTimeout(poll, 3000);
+        }
+
+        setTimeout(poll, 1000);
+      })();
+    </script>
+    @endif
     @else
 
     <!-- Quality Score Card -->

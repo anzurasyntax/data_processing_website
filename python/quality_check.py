@@ -66,15 +66,26 @@ def load_file(file_path, file_type):
     
     try:
         if file_type == 'csv':
-            df = pd.read_csv(file_path)
+            # Performance: allow chunk loading for large files (fallback to full read)
+            try:
+                df = pd.read_csv(file_path, chunksize=10000)
+                df = pd.concat(df, ignore_index=True)
+            except Exception:
+                df = pd.read_csv(file_path)
         elif file_type == 'txt':
             try:
-                df = pd.read_csv(file_path, sep=',')
+                df = pd.read_csv(file_path, sep=',', chunksize=10000)
+                df = pd.concat(df, ignore_index=True)
             except:
                 try:
-                    df = pd.read_csv(file_path, sep='\t')
+                    df = pd.read_csv(file_path, sep='\t', chunksize=10000)
+                    df = pd.concat(df, ignore_index=True)
                 except:
-                    df = pd.read_csv(file_path, sep=r'\s+', engine='python')
+                    try:
+                        df = pd.read_csv(file_path, sep=r'\s+', engine='python', chunksize=10000)
+                        df = pd.concat(df, ignore_index=True)
+                    except Exception:
+                        df = pd.read_csv(file_path, sep=r'\s+', engine='python')
         elif file_type == 'xml':
             df = pd.read_xml(file_path)
         elif file_type == 'xlsx':

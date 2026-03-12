@@ -70,55 +70,58 @@ class PythonProcessingService
             $payload['file_path'] = $this->validatePath($payload['file_path']);
         }
 
-        $pythonPath = $this->getPythonPath();
-        $process = new Process([
-            $pythonPath,
-            $scriptPath,
-            json_encode($payload)
-        ]);
-
         try {
-            $process->setTimeout(300); // 5 minute timeout
+            $t0 = microtime(true);
+            $pythonPath = $this->getPythonPath();
+            $encodedPayload = json_encode($payload);
+
+            Log::info('Python process start', [
+                'script' => $script,
+                'payload_keys' => array_keys($payload),
+            ]);
+
+            $process = new Process([
+                $pythonPath,
+                $scriptPath,
+                $encodedPayload,
+            ]);
+
+            // Phase 1: tighten timeout to 60 seconds for stability
+            $process->setTimeout(60);
             $process->run();
 
             $output = trim($process->getOutput());
             $errorOutput = trim($process->getErrorOutput());
 
             if (! $process->isSuccessful()) {
-                // Try to decode output as JSON error response first
                 $decodedError = null;
                 if (!empty($output)) {
                     $decodedError = json_decode($output, true);
                 }
-                
-                // If we got a JSON error response, use that
-                if ($decodedError && isset($decodedError['success']) && $decodedError['success'] === false) {
-                    $errorMessage = $decodedError['error'] ?? 'Unknown error from Python script';
-                    Log::error('Python process failed', [
-                        'script' => $script,
-                        'error' => $errorMessage,
-                        'error_type' => $decodedError['error_type'] ?? 'Unknown',
-                        'stdout' => $output,
-                        'stderr' => $errorOutput,
-                        'exit_code' => $process->getExitCode()
-                    ]);
-                    throw new Exception($errorMessage);
+
+                $errorPayload = [
+                    'status' => 'error',
+                    'message' => 'Python script failed',
+                    'details' => $errorOutput ?: $output,
+                    'script' => $script,
+                    'exit_code' => $process->getExitCode(),
+                ];
+
+                // Prefer structured error coming from Python, if present
+                if (is_array($decodedError) && ($decodedError['success'] ?? null) === false) {
+                    $errorPayload['details'] = $decodedError['error'] ?? $errorPayload['details'];
+                    $errorPayload['error_type'] = $decodedError['error_type'] ?? null;
                 }
-                
-                // Otherwise, use stderr or stdout
-                $errorMessage = $errorOutput ?: $output;
-                if (empty($errorMessage)) {
-                    $errorMessage = "Process exited with code {$process->getExitCode()}";
-                }
-                
+
                 Log::error('Python process failed', [
                     'script' => $script,
-                    'error' => $errorMessage,
                     'stdout' => $output,
                     'stderr' => $errorOutput,
-                    'exit_code' => $process->getExitCode()
+                    'exit_code' => $process->getExitCode(),
+                    'duration_ms' => (int) round((microtime(true) - $t0) * 1000),
                 ]);
-                throw new Exception('Python process failed: ' . $errorMessage);
+
+                throw new Exception(json_encode($errorPayload));
             }
 
             // Remove any surrounding quotes if present
@@ -139,15 +142,25 @@ class PythonProcessingService
 
             // Check if Python script returned an error
             if (isset($decoded['success']) && $decoded['success'] === false) {
-                $errorMessage = $decoded['error'] ?? 'Unknown error from Python script';
-                throw new Exception($errorMessage);
+                $errorPayload = [
+                    'status' => 'error',
+                    'message' => 'Python script failed',
+                    'details' => $decoded['error'] ?? null,
+                    'script' => $script,
+                ];
+                throw new Exception(json_encode($errorPayload));
             }
+
+            Log::info('Python process success', [
+                'script' => $script,
+                'duration_ms' => (int) round((microtime(true) - $t0) * 1000),
+            ]);
 
             return $decoded;
         } catch (Exception $e) {
             Log::error('Python processing exception', [
                 'script' => $script,
-                'exception' => $e->getMessage()
+                'exception' => $e->getMessage(),
             ]);
             throw $e;
         }
